@@ -14,16 +14,12 @@ class NotificationService {
   static List<AyahModel> _allAyahs = [];
   static Function(AyahModel)? onNotificationClicked;
 
-  // 1. تهيئة الإشعارات والمفتاح
+  // 1. تهيئة الإشعارات وتحديد المنطقة الزمنية بناءً على جهاز المستخدم أوتوماتيكياً
   static Future<void> initNotification({Function(AyahModel)? onClicked}) async {
     onNotificationClicked = onClicked;
     
+    // استخدام التوقيت المحلي للجهاز مباشرة
     tz.initializeTimeZones();
-    try {
-      tz.setLocalLocation(tz.getLocation('Africa/Cairo'));
-    } catch (e) {
-      tz.setLocalLocation(tz.getLocation('UTC'));
-    }
 
     const AndroidInitializationSettings initializationSettingsAndroid =
         AndroidInitializationSettings('@mipmap/ic_launcher');
@@ -47,7 +43,7 @@ class NotificationService {
               onNotificationClicked!(ayah);
             }
           } catch (e) {
-            // التعامل مع أي خطأ أثناء تحليل البيانات
+            // تجاهل أخطاء التفكيك
           }
         }
       },
@@ -56,16 +52,22 @@ class NotificationService {
     await _loadAyahs();
   }
 
-  // 2. طلب صلاحية الإشعارات
+  // 2. طلب الصلاحيات (الإشعارات + المنبهات الدقيقة)
   static Future<bool> requestPermission() async {
     final androidImplementation =
         _notificationsPlugin.resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>();
+            
     final bool? granted = await androidImplementation?.requestNotificationsPermission();
+    
+    try {
+      await androidImplementation?.requestExactAlarmsPermission();
+    } catch (_) {}
+
     return granted ?? false;
   }
 
-  // 3. قراءة كافة الآيات من الملف بدون تقييم بعدد معين
+  // 3. تحميل الآيات
   static Future<void> _loadAyahs() async {
     if (_allAyahs.isNotEmpty) return;
     try {
@@ -77,7 +79,7 @@ class NotificationService {
     }
   }
 
-  // 4. الحصول على الآية التالية في الحلقة العشوائية
+  // 4. اختيار الآية العشوائية غير المكررة
   static Future<AyahModel> getNextAyahInCycle() async {
     await _loadAyahs();
     if (_allAyahs.isEmpty) {
@@ -113,38 +115,41 @@ class NotificationService {
     );
   }
 
-  // 5. جدولة الإشعار (isFirstInstall: true للإشعار الأول من 5 لـ 120 دقيقة)
+  // 5. دالة الجدولة الرئيسية (من 5 إلى 16 ساعة بعد أول إشعار)
   static Future<void> scheduleRandomNotification({bool isFirstInstall = false}) async {
     AyahModel nextAyah = await getNextAyahInCycle();
     Random random = Random();
 
     int minutesToAdd;
     if (isFirstInstall) {
-      // من 5 دقائق إلى 120 دقيقة للإشعار الأول
-      minutesToAdd = 5 + random.nextInt(116);
+      // إشعار أول سريع للمستخدم للتجربة والتأكد (من 5 إلى 15 دقيقة)
+      minutesToAdd = 5 + random.nextInt(11);
     } else {
-      // من 5 ساعات (300 دقيقة) إلى 16 ساعة (960 دقيقة) للإشعارات التالية
-      int hours = 5 + random.nextInt(12); // بين 5 و 16 ساعة
+      // 🎯 الحد الأدنى 5 ساعات، والحد الأقصى 16 ساعة (5 + 0..11)
+      int hours = 5 + random.nextInt(12);
       minutesToAdd = hours * 60;
     }
 
-    // اقتصاص أول 3 كلمات للعنوان
     List<String> words = nextAyah.text.trim().split(RegExp(r'\s+'));
     String titleWords = words.take(3).join(' ');
 
     const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
-      'tazkara_quran_channel',
+      'tazkara_quran_channel_v3',
       'إشعارات آيات تذكرة',
       channelDescription: 'إشعارات دورية بآيات القرآن الكريم وتفسيرها',
       importance: Importance.max,
       priority: Priority.high,
+      playSound: true,
+      enableVibration: true,
       styleInformation: BigTextStyleInformation(''),
     );
 
-    const NotificationDetails platformDetails =
-        NotificationDetails(android: androidDetails);
+    const NotificationDetails platformDetails = NotificationDetails(android: androidDetails);
 
+    // استخدام التوقيت المحلي الفعلي للتليفون (tz.local)
     final scheduledDate = tz.TZDateTime.now(tz.local).add(Duration(minutes: minutesToAdd));
+
+    await _notificationsPlugin.cancelAll();
 
     await _notificationsPlugin.zonedSchedule(
       0,
@@ -160,6 +165,35 @@ class NotificationService {
         'text': nextAyah.text,
         'tafseer': nextAyah.tafseer,
         'audioPath': nextAyah.audioPath ?? '',
+      }),
+    );
+  }
+
+  // 🧪 دالة تجريبية سريعة (إشعار بعد 10 ثواني للضمان والتجربة)
+  static Future<void> testNotificationAfter10Seconds() async {
+    AyahModel ayah = await getNextAyahInCycle();
+    const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
+      'tazkara_quran_channel_v3',
+      'إشعارات آيات تذكرة',
+      importance: Importance.max,
+      priority: Priority.high,
+      styleInformation: BigTextStyleInformation(''),
+    );
+    const NotificationDetails platformDetails = NotificationDetails(android: androidDetails);
+
+    await _notificationsPlugin.zonedSchedule(
+      999,
+      'تَذْكِرَةٌ - تجربة فورية',
+      ayah.text,
+      tz.TZDateTime.now(tz.local).add(const Duration(seconds: 10)),
+      platformDetails,
+      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+      uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
+      payload: jsonEncode({
+        'id': ayah.id,
+        'text': ayah.text,
+        'tafseer': ayah.tafseer,
+        'audioPath': ayah.audioPath ?? '',
       }),
     );
   }
