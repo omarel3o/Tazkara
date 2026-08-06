@@ -12,7 +12,7 @@ GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // تهيئة الإشعارات مع التعامل عند فتح الإشعار
+  // 1. تهيئة خدمة الإشعارات وتحديد حدث الضغط
   await NotificationService.initNotification(onClicked: (AyahModel ayah) {
     navigatorKey.currentState?.push(
       MaterialPageRoute(
@@ -22,12 +22,18 @@ void main() async {
         ),
       ),
     );
-    // جدولة الإشعار التالي تلقائياً بعد الفتح (بين 5 إلى 16 ساعة)
+    // جدولة الإشعار التالي بعد الفتح (من 5 إلى 16 ساعة)
     NotificationService.scheduleRandomNotification(isFirstInstall: false);
   });
 
   String? userName = await LocalStorageService.getUserName();
   bool isDark = await LocalStorageService.getDarkMode();
+
+  // 2. إذا كان المستخدم قد سجل حسابه بالفعل سابقاً، يتم تفعيل وسرد الجدولة
+  if (userName != null && userName.isNotEmpty) {
+    await NotificationService.requestPermission();
+    NotificationService.scheduleRandomNotification(isFirstInstall: false);
+  }
 
   runApp(MyApp(hasName: userName != null && userName.isNotEmpty, initialIsDark: isDark));
 }
